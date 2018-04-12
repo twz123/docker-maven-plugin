@@ -14,6 +14,7 @@ import java.util.concurrent.*;
 
 import com.google.common.util.concurrent.MoreExecutors;
 import io.fabric8.maven.docker.access.DockerAccessException;
+import io.fabric8.maven.docker.access.ExecException;
 import io.fabric8.maven.docker.access.PortMapping;
 import io.fabric8.maven.docker.config.*;
 import io.fabric8.maven.docker.log.LogDispatcher;
@@ -91,6 +92,7 @@ public class StartMojo extends AbstractDockerMojo {
      */
     @Override
     public synchronized void executeInternal(final ServiceHub hub) throws DockerAccessException,
+                                                                          ExecException,
                                                                           MojoExecutionException {
         if (skipRun) {
             return;
@@ -140,21 +142,14 @@ public class StartMojo extends AbstractDockerMojo {
                     // Move from waiting to starting status
                     imagesStarting.add(image);
                     imagesWaitingToStart.remove(image);
+                    
+                    if (!startParallel) {
+                        waitForStartedContainer(hub, containerStartupService, startedContainerAliases, imagesStarting);
+                    }
                 }
 
-                // Wait for the next container to finish startup
-                final Future<StartedContainer> startedContainerFuture = containerStartupService.take();
-                try {
-                    final StartedContainer startedContainer = startedContainerFuture.get();
-                    final ImageConfiguration imageConfig = startedContainer.imageConfig;
-
-                    updateAliasesSet(startedContainerAliases, imageConfig.getAlias());
-                    exposeContainerProps(hub.getQueryService(), startedContainer);
-
-                    // All done with this image
-                    imagesStarting.remove(imageConfig);
-                } catch (ExecutionException e) {
-                    rethrowCause(e);
+                if (startParallel) {
+                    waitForStartedContainer(hub, containerStartupService, startedContainerAliases, imagesStarting);
                 }
             }
 
@@ -182,6 +177,25 @@ public class StartMojo extends AbstractDockerMojo {
         }
     }
 
+    private void waitForStartedContainer(final ServiceHub hub,
+            final ExecutorCompletionService<StartedContainer> containerStartupService,
+            final Set<String> startedContainerAliases, final Queue<ImageConfiguration> imagesStarting)
+            throws InterruptedException, DockerAccessException, IOException, ExecException {
+        final Future<StartedContainer> startedContainerFuture = containerStartupService.take();
+        try {
+            final StartedContainer startedContainer = startedContainerFuture.get();
+            final ImageConfiguration imageConfig = startedContainer.imageConfig;
+
+            updateAliasesSet(startedContainerAliases, imageConfig.getAlias());
+            exposeContainerProps(hub.getQueryService(), startedContainer);
+
+            // All done with this image
+            imagesStarting.remove(imageConfig);
+        } catch (ExecutionException e) {
+            rethrowCause(e);
+        }
+    }
+
     protected Boolean followLogs() {
         return Boolean.valueOf(System.getProperty("docker.follow", "false"));
     }
@@ -203,12 +217,14 @@ public class StartMojo extends AbstractDockerMojo {
         }
     }
 
-    private void rethrowCause(ExecutionException e) throws IOException, InterruptedException {
+    private void rethrowCause(ExecutionException e) throws IOException, InterruptedException, ExecException {
         Throwable cause = e.getCause();
         if (cause instanceof RuntimeException) {
             throw (RuntimeException) cause;
         } else if (cause instanceof IOException) {
             throw (IOException) cause;
+        } else if (cause instanceof ExecException) {
+            throw (ExecException) cause;
         } else if (cause instanceof InterruptedException) {
                 throw (InterruptedException) cause;
         } else {
@@ -254,7 +270,15 @@ public class StartMojo extends AbstractDockerMojo {
                 hub.getWaitService().wait(image, projProperties, containerId);
                 WaitConfiguration waitConfig = runConfig.getWaitConfiguration();
                 if (waitConfig != null && waitConfig.getExec() != null && waitConfig.getExec().getPostStart() != null) {
-                    runService.execInContainer(containerId, waitConfig.getExec().getPostStart(), image);
+                    try {
+                        runService.execInContainer(containerId, waitConfig.getExec().getPostStart(), image);
+                    } catch (ExecException exp) {
+                        if (waitConfig.getExec().isBreakOnError()) {
+                            throw exp;
+                        } else {
+                            log.warn("Cannot run postStart: %s", exp.getMessage());
+                        }
+                    }
                 }
 
                 return new StartedContainer(image, containerId);
@@ -346,7 +370,7 @@ public class StartMojo extends AbstractDockerMojo {
         if (runConfig != null) {
             LogConfiguration logConfig = runConfig.getLogConfiguration();
             if (logConfig != null) {
-                return logConfig.isEnabled();
+                return Boolean.TRUE == logConfig.isEnabled();
             } else {
                 // Default is to show logs if "follow" is true
                 return follow;
