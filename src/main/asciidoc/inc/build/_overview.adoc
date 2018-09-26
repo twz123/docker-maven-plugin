@@ -1,6 +1,6 @@
 
 [[build-overview]]
-There are two different modes how Images can be built:
+There are two different modes how images can be built:
 
 .Inline plugin configuration
 With an inline plugin configuration all information required to build the image is contained in the plugin configuration. By default its the standard XML based configuration for the plugin but can be switched to a property based configuration syntax as described in the section <<external-configuration,External configuration>>. The XML configuration syntax is recommended because of its more structured and typed nature.
@@ -40,14 +40,16 @@ If this directory contains a `.maven-dockerinclude` file, then it is used for in
 Except for the <<build-assembly,assembly configuration>> all other configuration options are ignored for now.
 
 [[simple-dockerfile-build]]
-.Simple Dockerfile mode
+.Simple Dockerfile build
 
 When only a single image should be built with a Dockerfile no XML configuration is needed at all.
 All what need to be done is to place a `Dockerfile` into the top-level module directory, alongside to `pom.xml`.
-You can still configure <<global-configuration, global aspect>> in the plugin configuration, but as soon as you add an `<image>` in the XML configuration, you need to configure also the build explicitly.
+You can still configure <<global-configuration, global aspects>> in the plugin configuration, but as soon as you add an `<image>` in the XML configuration, you need to configure also the build explicitly.
 
-The image name is by default set from the Maven coordinates: `${project.groupId}/${project.artifactId}:${project.version}`
-This name can be overwritten with a property `docker.name` which can also hold placeholders as described in <<image-name-placeholders,Name placeholders>>.
+The image name is by default set from the Maven coordinates (`%g/%a:%l`, see <<image-name,Image Name >> for an explanation of the params which are essentially the Maven GAV)
+This name can be set with the property `docker.name`.
+
+If you want to add some `<run>` configuration to this image for starting it with `docker:run` then you can add an image configuration but without a `<build>` section in which case the Dockerfile will be picked up, too. This works only for a single image, though.
 
 [[build-filtering]]
 .Filtering
@@ -86,3 +88,62 @@ The following example uses a Dockerfile in the directory
  ...
 </plugin>
 ----
+
+[[build-plugin]]
+.Build Plugins
+
+This plugin supports so call *dmp-plugins* which are used during the build phase.
+dmp-plugins are enabled by just declaring a dependency in the plugin declaration:
+
+[source, xml]
+----
+<plugin>
+  <groupId>io.fabric8</groupId>
+  <artifactId>docker-maven-plugin</artifactId>
+
+  <dependencies>
+    <dependency>
+      <groupId>io.fabric8</groupId>
+      <artifactId>run-java-sh</artifactId>
+      <version>1.2.2</version>
+    </dependency>
+  </dependencies>
+</plugin>
+----
+
+These plugins contain a descriptor `META-INF/maven/io.fabric8/dmp-plugin` with class names, line-by-line:
+
+[source]
+----
+io.fabric8.runsh.RunShLoader
+----
+
+During a build with `docker:build`, those classes are loaded and certain fixed method are called.
+
+The following methods are supported:
+
+[[build-plugin-methods]]
+[cols="1,5"]
+|===
+| Method | Description
+
+| *addExtraFiles*
+| A _static_ method called by dmp with a single `File` argument. This will point to a directory `docker-extra` which can be referenced easily by a Dockerfile or an assembly. A dmp plugin typically will create an own subdirectory to avoid a clash with other dmp-plugins.
+|===
+
+If a configured plugin does not provide method of this name and signature, then it will be simply ignored.
+Also, no interface needs to be implemented to keep the coupling low.
+
+The following official dmp-plugins are known and supported:
+
+[[build-plugins-official]]
+[cols="1,1,5"]
+|===
+| Name | G,A | Description
+
+| https://github.com/fabric8io-images/run-java[run-java.sh]
+| `fabric8.io`, `run-java`
+| General purpose startup script fo running Java applications. The dmp plugin creates a `target/docker-extra/run-java/run-java.sh` which can be included in a Dockerfile (see the example above). See the https://github.com/fabric8io-images/run-java[run-java.sh Documentation] for more details.
+|===
+
+Check out `samples/run-java` for a fully working example.

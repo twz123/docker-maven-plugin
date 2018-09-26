@@ -76,8 +76,9 @@ public class ValueProvider {
 
     public int getInt(ConfigKey key, Integer fromConfig) {
         Integer integer = getInteger(key, fromConfig);
-        if(integer == null)
+        if(integer == null) {
             return 0;
+        }
         return integer;
     }
 
@@ -101,6 +102,16 @@ public class ValueProvider {
         return mapValueExtractor.getFromPreferredSource(prefix, key, fromConfig);
     }
 
+    public <T> T getObject(ConfigKey key, T fromConfig, final com.google.common.base.Function<String, T> converter) {
+        ValueExtractor<T> arbitraryExtractor = new ValueExtractor<T>() {
+            @Override
+            protected T withPrefix(String prefix, ConfigKey key, Properties properties) {
+                return converter.apply(properties.getProperty(key.asPropertyKey(prefix)));
+            }
+        };
+
+        return arbitraryExtractor.getFromPreferredSource(prefix, key, fromConfig);
+    }
 
     /**
      * Helper base class for picking values out of the the Properties class and/or config value.
@@ -110,8 +121,9 @@ public class ValueProvider {
      */
     private abstract class ValueExtractor<T> {
         T getFromPreferredSource(String prefix, ConfigKey key, T fromConfig) {
-            if(propertyMode == PropertyMode.Skip)
+            if(propertyMode == PropertyMode.Skip) {
                 return fromConfig;
+            }
 
             List<T> values = new ArrayList<>();
 
@@ -127,16 +139,20 @@ public class ValueProvider {
                 case Only:
                     return fromProperty;
                 case Override:
-                    if(fromProperty != null)
+                    if(fromProperty != null) {
                         values.add(fromProperty);
-                    if(fromConfig != null)
+                    }
+                    if(fromConfig != null) {
                         values.add(fromConfig);
+                    }
                     break;
                 case Fallback:
-                    if(fromConfig != null)
+                    if(fromConfig != null) {
                         values.add(fromConfig);
-                    if(fromProperty != null)
+                    }
+                    if(fromProperty != null) {
                         values.add(fromProperty);
+                    }
                     break;
                 default:
                     throw new AssertionError("Invalid PropertyMode");

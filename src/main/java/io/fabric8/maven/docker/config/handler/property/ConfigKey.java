@@ -64,6 +64,7 @@ public enum ConfigKey {
     HEALTHCHECK_MODE("healthcheck.mode"),
     HEALTHCHECK_INTERVAL("healthcheck.interval"),
     HEALTHCHECK_TIMEOUT("healthcheck.timeout"),
+    HEALTHCHECK_START_PERIOD("healthcheck.startPeriod"),
     HEALTHCHECK_RETRIES("healthcheck.retries"),
     HEALTHCHECK_CMD("healthcheck.cmd"),
     HOSTNAME,
@@ -74,6 +75,7 @@ public enum ConfigKey {
     LOG_ENABLED("log.enabled"),
     LOG_PREFIX("log.prefix"),
     LOG_DATE("log.date"),
+    LOG_FILE("log.file"),
     LOG_COLOR("log.color"),
     LOG_DRIVER_NAME("log.driver.name"),
     LOG_DRIVER_OPTS("log.driver.opts"),
@@ -152,12 +154,11 @@ public enum ConfigKey {
     // Convert to camel case
     private String toVarName(String s) {
         String[] parts = s.split("_");
-        String var = parts[0].toLowerCase();
+        StringBuilder var = new StringBuilder(parts[0].toLowerCase());
         for (int i = 1; i < parts.length; i++) {
-            var = var + parts[i].substring(0, 1).toUpperCase() +
-                  parts[i].substring(1).toLowerCase();
+            var.append(parts[i].substring(0, 1).toUpperCase()).append(parts[i].substring(1).toLowerCase());
         }
-        return var;
+        return var.toString();
     }
 
     public String asPropertyKey(String prefix) {
