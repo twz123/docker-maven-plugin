@@ -4,14 +4,17 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.Writer;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import java.util.function.UnaryOperator;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
+import com.google.gson.internal.reflect.ReflectionAccessor;
 import io.fabric8.maven.docker.access.AuthConfig;
 import mockit.Expectations;
 import mockit.Mock;
@@ -253,15 +256,24 @@ public class AuthConfigFactoryTest {
     }
 
     private void executeWithTempHomeDir(HomeDirExecutor executor) throws IOException, MojoExecutionException {
-        String userHome = System.getProperty("user.home");
         try {
-            File tempDir = Files.createTempDirectory("d-m-p").toFile();
-            System.setProperty("user.home", tempDir.getAbsolutePath());
-            executor.exec(tempDir);
-        } finally {
-            System.setProperty("user.home",userHome);
+            Field envField = DockerFileUtil.class.getDeclaredField("systemGetEnv");
+            ReflectionAccessor.getInstance().makeAccessible(envField);
+            @SuppressWarnings("unchecked")
+            UnaryOperator<String> origEnv = (UnaryOperator<String>) envField.get(null);
+            try {
+                File tempDir = Files.createTempDirectory("d-m-p").toFile();
+                UnaryOperator<String> homeEnv = name -> {
+                    return "HOME".equals(name) ? tempDir.getAbsolutePath() : origEnv.apply(name);
+                };
+                envField.set(null, homeEnv);
+                executor.exec(tempDir);
+            } finally {
+                envField.set(null, origEnv);
+            }
+        } catch (NoSuchFieldException | IllegalAccessException e) {
+            throw new AssertionError(e);
         }
-
     }
 
     interface HomeDirExecutor {

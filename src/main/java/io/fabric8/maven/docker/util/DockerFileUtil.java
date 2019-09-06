@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.UnaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -39,6 +40,9 @@ import org.yaml.snakeyaml.Yaml;
  * @since 21/01/16
  */
 public class DockerFileUtil {
+
+    // injection point for unit tests
+    private static UnaryOperator<String> systemGetEnv = System::getenv;
 
     private DockerFileUtil() {}
 
@@ -178,9 +182,9 @@ public class DockerFileUtil {
     }
 
     private static File getHomeDir() {
-        String homeDir = System.getProperty("user.home");
+        String homeDir = systemGetEnv.apply("HOME");
         if (homeDir == null) {
-            homeDir = System.getenv("HOME");
+            homeDir = System.getProperty("user.home");
         }
         return new File(homeDir);
     }
