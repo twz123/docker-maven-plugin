@@ -13,6 +13,8 @@ import java.util.Map;
 
 import java.util.function.UnaryOperator;
 import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.internal.reflect.ReflectionAccessor;
 import io.fabric8.maven.docker.access.AuthConfig;
@@ -28,6 +30,7 @@ import org.codehaus.plexus.util.Base64;
 import org.codehaus.plexus.util.IOUtil;
 import org.codehaus.plexus.util.xml.Xpp3Dom;
 import org.hamcrest.Matchers;
+import org.json.JSONObject;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -62,7 +65,8 @@ public class AuthConfigFactoryTest {
 
     private boolean isPush = true;
 
-    private Gson gson;
+    private GsonBuilder gsonBuilder;
+
 
     public static final class MockSecDispatcher implements SecDispatcher {
         @Mock
@@ -87,7 +91,7 @@ public class AuthConfigFactoryTest {
         factory = new AuthConfigFactory(container);
         factory.setLog(log);
 
-        gson = new Gson();
+        gsonBuilder = new GsonBuilder();
     }
 
     @Test
@@ -208,6 +212,18 @@ public class AuthConfigFactoryTest {
     }
 
     @Test
+    public void testDockerLoginNoErrorWhenEmailInAuthConfigContainsNullValue() throws MojoExecutionException, IOException {
+        executeWithTempHomeDir(new HomeDirExecutor() {
+            @Override
+            public void exec(File homeDir) throws IOException, MojoExecutionException {
+                writeDockerConfigJson(createDockerConfig(homeDir),"roland", "pass", null, "registry:5000", true);
+                AuthConfig config = factory.createAuthConfig(isPush,false,null,settings,"roland","registry:5000");
+                assertNotNull(config);
+            }
+        });
+    }
+
+    @Test
     public void testDockerLoginSelectCredentialHelper() throws MojoExecutionException, IOException {
         executeWithTempHomeDir(new HomeDirExecutor() {
             @Override
@@ -282,7 +298,7 @@ public class AuthConfigFactoryTest {
 
     private void checkDockerAuthLogin(File homeDir,String configRegistry,String lookupRegistry)
             throws IOException, MojoExecutionException {
-        writeDockerConfigJson(createDockerConfig(homeDir), "roland", "secret", "roland@jolokia.org", configRegistry);
+        writeDockerConfigJson(createDockerConfig(homeDir), "roland", "secret", "roland@jolokia.org", configRegistry, false);
         AuthConfig config = factory.createAuthConfig(isPush, false, null, settings, "roland", lookupRegistry);
         verifyAuthConfig(config,"roland","secret","roland@jolokia.org");
     }
@@ -295,14 +311,17 @@ public class AuthConfigFactoryTest {
     }
 
     private void writeDockerConfigJson(File dockerDir, String user, String password,
-                                       String email, String registry) throws IOException {
+                                       String email, String registry, boolean shouldSerializeNulls) throws IOException {
         File configFile = new File(dockerDir,"config.json");
 
         JsonObject config = new JsonObject();
         addAuths(config,user,password,email,registry);
 
         try (Writer writer = new FileWriter(configFile)){
-            gson.toJson(config, writer);
+            if (shouldSerializeNulls) {
+                gsonBuilder.serializeNulls();
+            }
+            gsonBuilder.create().toJson(config, writer);
         }
     }
 
@@ -321,7 +340,7 @@ public class AuthConfigFactoryTest {
         addAuths(config,"roland","secret","roland@jolokia.org", "localhost:5000");
 
         try (Writer writer = new FileWriter(configFile)){
-            gson.toJson(config, writer);
+            gsonBuilder.create().toJson(config, writer);
         }
     }
 
@@ -329,7 +348,12 @@ public class AuthConfigFactoryTest {
         JsonObject auths = new JsonObject();
         JsonObject value = new JsonObject();
         value.addProperty("auth", new String(Base64.encodeBase64((user + ":" + password).getBytes())));
-        value.addProperty("email",email);
+        if (email == null) {
+            value.add("email", JsonNull.INSTANCE);
+        } else {
+            value.addProperty("email", email);
+        }
+
         auths.add(registry, value);
         config.add("auths",auths);
     }
@@ -521,7 +545,7 @@ public class AuthConfigFactoryTest {
     }
 
     private void verifyAuthConfig(AuthConfig config, String username, String password, String email) {
-        JsonObject params = gson.fromJson(new String(Base64.decodeBase64(config.toHeaderValue().getBytes())), JsonObject.class);
+        JsonObject params = gsonBuilder.create().fromJson(new String(Base64.decodeBase64(config.toHeaderValue().getBytes())), JsonObject.class);
         assertEquals(username,params.get("username").getAsString());
         assertEquals(password,params.get("password").getAsString());
         if (email != null) {
