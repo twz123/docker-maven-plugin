@@ -10,17 +10,22 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
 import java.util.function.UnaryOperator;
-import com.google.gson.Gson;
+
+import com.google.common.collect.ImmutableMap;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.internal.reflect.ReflectionAccessor;
 import io.fabric8.maven.docker.access.AuthConfig;
+import io.fabric8.maven.docker.util.aws.AwsSdkAuthConfigFactory;
 import mockit.Expectations;
 import mockit.Mock;
+import mockit.MockUp;
 import mockit.Mocked;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.bootstrap.HttpServer;
+import org.apache.http.impl.bootstrap.ServerBootstrap;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.settings.Server;
 import org.apache.maven.settings.Settings;
@@ -30,14 +35,17 @@ import org.codehaus.plexus.util.Base64;
 import org.codehaus.plexus.util.IOUtil;
 import org.codehaus.plexus.util.xml.Xpp3Dom;
 import org.hamcrest.Matchers;
-import org.json.JSONObject;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.contrib.java.lang.system.EnvironmentVariables;
 import org.junit.rules.ExpectedException;
 import org.sonatype.plexus.components.sec.dispatcher.SecDispatcher;
 
 import static java.util.Collections.singletonMap;
+import static java.util.UUID.randomUUID;
+import static org.apache.http.HttpStatus.SC_NOT_FOUND;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.Matchers.hasProperty;
 import static org.hamcrest.Matchers.instanceOf;
@@ -55,6 +63,9 @@ public class AuthConfigFactoryTest {
 
     public static final String ECR_NAME = "123456789012.dkr.ecr.bla.amazonaws.com";
 
+    @Rule
+    public final EnvironmentVariables environmentVariables = new EnvironmentVariables();
+
     @Mocked
     Settings settings;
 
@@ -66,6 +77,8 @@ public class AuthConfigFactoryTest {
     private boolean isPush = true;
 
     private GsonBuilder gsonBuilder;
+
+    private HttpServer httpServer;
 
 
     public static final class MockSecDispatcher implements SecDispatcher {
@@ -92,6 +105,14 @@ public class AuthConfigFactoryTest {
         factory.setLog(log);
 
         gsonBuilder = new GsonBuilder();
+    }
+
+    @After
+    public void shutdownHttpServer() {
+        if (httpServer != null) {
+            httpServer.stop();
+            httpServer = null;
+        }
     }
 
     @Test
@@ -515,6 +536,84 @@ public class AuthConfigFactoryTest {
         });
     }
 
+    @Test
+    public void getAuthConfigViaAwsSdk() throws MojoExecutionException {
+        String accessKeyId = randomUUID().toString();
+        String secretAccessKey = randomUUID().toString();
+        new MockedAwsSdkAuthConfigFactory(accessKeyId, secretAccessKey);
+
+        AuthConfig authConfig = factory.createAuthConfig(false, true, null, settings, "user", ECR_NAME);
+
+        verifyAuthConfig(authConfig, accessKeyId, secretAccessKey, null, null);
+    }
+
+    @Test
+    public void ecsTaskRole() throws IOException, MojoExecutionException {
+        givenAwsSdkIsDisabled();
+        String containerCredentialsUri = "/v2/credentials/" + randomUUID().toString();
+        String accessKeyId = randomUUID().toString();
+        String secretAccessKey = randomUUID().toString();
+        String sessionToken = randomUUID().toString();
+        givenEcsMetadataService(containerCredentialsUri, accessKeyId, secretAccessKey, sessionToken);
+        setupEcsMetadataConfiguration(httpServer, containerCredentialsUri);
+
+        AuthConfig authConfig = factory.createAuthConfig(false, true, null, settings, "user", ECR_NAME);
+
+        verifyAuthConfig(authConfig, accessKeyId, secretAccessKey, null, sessionToken);
+    }
+
+    @Test
+    public void fargateTaskRole() throws IOException, MojoExecutionException {
+        givenAwsSdkIsDisabled();
+        String containerCredentialsUri = "v2/credentials/" + randomUUID().toString();
+        String accessKeyId = randomUUID().toString();
+        String secretAccessKey = randomUUID().toString();
+        String sessionToken = randomUUID().toString();
+        givenEcsMetadataService("/" + containerCredentialsUri, accessKeyId, secretAccessKey, sessionToken);
+        setupEcsMetadataConfiguration(httpServer, containerCredentialsUri);
+
+        AuthConfig authConfig = factory.createAuthConfig(false, true, null, settings, "user", ECR_NAME);
+
+        verifyAuthConfig(authConfig, accessKeyId, secretAccessKey, null, sessionToken);
+    }
+
+    @Test
+    public void awsTemporaryCredentialsArePickedUpFromEnvironment() throws MojoExecutionException {
+        givenAwsSdkIsDisabled();
+        String accessKeyId = randomUUID().toString();
+        String secretAccessKey = randomUUID().toString();
+        String sessionToken = randomUUID().toString();
+        environmentVariables.set("AWS_ACCESS_KEY_ID", accessKeyId);
+        environmentVariables.set("AWS_SECRET_ACCESS_KEY", secretAccessKey);
+        environmentVariables.set("AWS_SESSION_TOKEN", sessionToken);
+
+        AuthConfig authConfig = factory.createAuthConfig(false, true, null, settings, "user", ECR_NAME);
+
+        verifyAuthConfig(authConfig, accessKeyId, secretAccessKey, null, sessionToken);
+    }
+
+    @Test
+    public void awsStaticCredentialsArePickedUpFromEnvironment() throws MojoExecutionException {
+        givenAwsSdkIsDisabled();
+        String accessKeyId = randomUUID().toString();
+        String secretAccessKey = randomUUID().toString();
+        environmentVariables.set("AWS_ACCESS_KEY_ID", accessKeyId);
+        environmentVariables.set("AWS_SECRET_ACCESS_KEY", secretAccessKey);
+
+        AuthConfig authConfig = factory.createAuthConfig(false, true, null, settings, "user", ECR_NAME);
+
+        verifyAuthConfig(authConfig, accessKeyId, secretAccessKey, null, null);
+    }
+
+    @Test
+    public void incompleteAwsCredentialsAreIgnored() throws MojoExecutionException {
+        givenAwsSdkIsDisabled();
+        environmentVariables.set("AWS_ACCESS_KEY_ID", randomUUID().toString());
+
+        AuthConfig authConfig = factory.createAuthConfig(false, true, null, settings, "user", ECR_NAME);
+
+        assertNull(authConfig);
+    }
 
     private void setupServers() {
         new Expectations() {{
@@ -544,13 +643,82 @@ public class AuthConfigFactoryTest {
         };
     }
 
-    private void verifyAuthConfig(AuthConfig config, String username, String password, String email) {
+    private void givenEcsMetadataService(String containerCredentialsUri, String accessKeyId, String secretAccessKey, String sessionToken) throws IOException {
+        httpServer = ServerBootstrap.bootstrap()
+                .registerHandler("*", (request, response, context) -> {
+                    System.out.println("REQUEST: " + request.getRequestLine());
+                    if (containerCredentialsUri.matches(request.getRequestLine().getUri())) {
+                        response.setEntity(new StringEntity(gsonBuilder.create().toJson(ImmutableMap.of(
+                                "AccessKeyId", accessKeyId,
+                                "SecretAccessKey", secretAccessKey,
+                                "Token", sessionToken
+                        ))));
+                    } else {
+                        response.setStatusCode(SC_NOT_FOUND);
+                    }
+                })
+                .create();
+        httpServer.start();
+    }
+
+    private void setupEcsMetadataConfiguration(HttpServer httpServer, String containerCredentialsUri) {
+        environmentVariables.set("ECS_METADATA_ENDPOINT", "http://" +
+                httpServer.getInetAddress().getHostAddress()+":" + httpServer.getLocalPort());
+        environmentVariables.set("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", containerCredentialsUri);
+    }
+
+    private void verifyAuthConfig(AuthConfig config, String username, String password, String email, String auth) {
+        assertNotNull(config);
         JsonObject params = gsonBuilder.create().fromJson(new String(Base64.decodeBase64(config.toHeaderValue().getBytes())), JsonObject.class);
-        assertEquals(username,params.get("username").getAsString());
-        assertEquals(password,params.get("password").getAsString());
+        assertEquals(username, params.get(AuthConfig.AUTH_USERNAME).getAsString());
+        assertEquals(password, params.get(AuthConfig.AUTH_PASSWORD).getAsString());
         if (email != null) {
-            assertEquals(email, params.get("email").getAsString());
+            assertEquals(email, params.get(AuthConfig.AUTH_EMAIL).getAsString());
         }
+        if (auth != null) {
+            assertEquals(auth, params.get(AuthConfig.AUTH_AUTH).getAsString());
+        }
+    }
+
+    private void verifyAuthConfig(AuthConfig config, String username, String password, String email) {
+        verifyAuthConfig(config, username, password, email, null);
+    }
+
+    private static void givenAwsSdkIsDisabled() {
+        new DisableAwsSdkAuthConfigFactory();
+    }
+
+    private static class MockedAwsSdkAuthConfigFactory extends MockUp<AwsSdkAuthConfigFactory> {
+        private final String accessKeyId;
+        private final String secretAccessKey;
+
+        public MockedAwsSdkAuthConfigFactory(String accessKeyId, String secretAccessKey) {
+            this.accessKeyId = accessKeyId;
+            this.secretAccessKey = secretAccessKey;
+        }
+
+        @Mock
+        public void $init(Logger log) {
+        }
+
+        @Mock
+        public AuthConfig createAuthConfig() {
+            return new AuthConfig(accessKeyId, secretAccessKey, null,null);
+        }
+
+    }
+
+    private static class DisableAwsSdkAuthConfigFactory extends MockUp<AwsSdkAuthConfigFactory> {
+
+        @Mock
+        public void $init(Logger log) {
+        }
+
+        @Mock
+        public AuthConfig createAuthConfig() {
+            return null;
+        }
+
     }
 
 }
