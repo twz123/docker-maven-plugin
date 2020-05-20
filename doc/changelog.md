@@ -1,5 +1,8 @@
 # ChangeLog
 
+* **0.33-SNAPSHOT**
+  - Prefer HOME environment variable over the Java system property to dertermine the user's home directory to better resemble the golang client's behavior ([#1236](https://github.com/fabric8io/docker-maven-plugin/pull/1263)
+
 * **0.33.0** (2020-01-21)
   - Update to jnr-unixsocket 0.25 to solve concurrency issues ([#552](https://github.com/fabric8io/docker-maven-plugin/issues/552))
   - Udate ECR AuthorizationToken URL to new endpoint ([#1317](https://github.com/fabric8io/docker-maven-plugin/issues/1317))
