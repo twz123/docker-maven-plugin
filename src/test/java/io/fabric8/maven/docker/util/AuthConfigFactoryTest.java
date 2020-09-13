@@ -5,6 +5,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.Writer;
 import java.lang.reflect.Field;
+import java.net.InetAddress;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -294,6 +295,7 @@ public class AuthConfigFactoryTest {
     }
 
     private void executeWithTempHomeDir(HomeDirExecutor executor) throws IOException, MojoExecutionException {
+        environmentVariables.clear("KUBECONFIG");
         try {
             Field envField = DockerFileUtil.class.getDeclaredField("systemGetEnv");
             ReflectionAccessor.getInstance().makeAccessible(envField);
@@ -456,7 +458,7 @@ public class AuthConfigFactoryTest {
                 Map<String,String> authConfigMap = new HashMap<>();
                 authConfigMap.put("useOpenShiftAuth","true");
                 expectedException.expect(MojoExecutionException.class);
-                expectedException.expectMessage(containsString("~/.kube/config"));
+                expectedException.expectMessage(containsString(".kube/config"));
                 factory.createAuthConfig(isPush,false,authConfigMap,settings,"roland",null);
             }
         });
@@ -662,20 +664,22 @@ public class AuthConfigFactoryTest {
     }
 
     private void givenEcsMetadataService(String containerCredentialsUri, String accessKeyId, String secretAccessKey, String sessionToken) throws IOException {
-        httpServer = ServerBootstrap.bootstrap()
-                .registerHandler("*", (request, response, context) -> {
-                    System.out.println("REQUEST: " + request.getRequestLine());
-                    if (containerCredentialsUri.matches(request.getRequestLine().getUri())) {
-                        response.setEntity(new StringEntity(gsonBuilder.create().toJson(ImmutableMap.of(
-                                "AccessKeyId", accessKeyId,
-                                "SecretAccessKey", secretAccessKey,
-                                "Token", sessionToken
-                        ))));
-                    } else {
-                        response.setStatusCode(SC_NOT_FOUND);
-                    }
-                })
-                .create();
+        httpServer =
+            ServerBootstrap.bootstrap()
+                           .setLocalAddress(InetAddress.getLoopbackAddress())
+                           .registerHandler("*", (request, response, context) -> {
+                               System.out.println("REQUEST: " + request.getRequestLine());
+                               if (containerCredentialsUri.matches(request.getRequestLine().getUri())) {
+                                   response.setEntity(new StringEntity(gsonBuilder.create().toJson(ImmutableMap.of(
+                                       "AccessKeyId", accessKeyId,
+                                       "SecretAccessKey", secretAccessKey,
+                                       "Token", sessionToken
+                                                                                                                  ))));
+                               } else {
+                                   response.setStatusCode(SC_NOT_FOUND);
+                               }
+                           })
+                           .create();
         httpServer.start();
     }
 
